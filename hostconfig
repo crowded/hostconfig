@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+
+# Using pwd -P here to resolve any symlinks from calling say via /bin
+pushd "$( cd "$(dirname "$0")" ; pwd -P )" > /dev/null
+OPT_CONFIG="${HOSTCONFIG_CONFIG:-'/etc/hostconfig/hostconfig.conf'}"
+
+new() {
+  local prefix=''
+  generate_prefix "$FILENAME"
+
+cat << EOF > "$TOMLCONFIGPATH"
+[template]
+src = "$OPT_TEMPLATE"
+dest = "$NGINXAVAILABLEPATH/$FILENAME"
+prefix = "/$prefix"
+keys = [
+    "/fullredirect/hostnames",
+    "/fullredirect/tohost",
+    "/partialredirect/hostnames",
+    "/partialredirect/tohost",
+    "/primaryhostnames",
+    "/filename",
+    "/ishttp",
+    "/isbarehost",
+    "/isunlisted",
+]
+check_cmd = "nginx -t -c {{.src}}"
+reload_cmd = "service nginx reload"
+EOF
+
+  if [[ -f $SETTINGSPATH ]] && [[ -z $DO_FORCE ]]; then
+    return $(err "Tenant already exists, run with --force to override settings"); fi
+
+cat << EOF > "$SETTINGSPATH"
+# PRIMARYHOST is only used within settings, not available in confd tmpl
+PRIMARYHOST=$SETTING_PRIMARYHOST
+PRIMARYHOSTNAMES=$SETTING_PRIMARYHOSTNAMES
+
+# Full redirect is default redirects and primary hostnames
+FULLREDIRECT_HOSTNAMES=$SETTING_FULLREDIRECT
+FULLREDIRECT_TOHOST=$SETTING_FULLREDIRECT_TOHOST
+# Partial redirect is just the default redirects to help prevent redirect loop
+PARTIALREDIRECT_HOSTNAMES=$SETTING_PARTIALREDIRECT
+PARTIALREDIRECT_TOHOST=$SETTING_PARTIALREDIRECT_TOHOST
+
+EOF
+  # By default enable config by setting DO_DISABLE=false
+  if [[ ! $DO_DISABLE ]]; then DO_DISABLE=false; fi
+  apply_opts && run_confd $FILENAME
+}
+
+update() { apply_opts && run_confd $FILENAME; }
+update-all() {
+  local DO_ALL=true;
+  echo -e "${color_yellow}Ignoring all other option flags when running update-all ${color_norm}"
+  run_confd
+}
+
+delete() {
+  if [[ ! $DO_FORCE ]]; then
+    echo -e "${color_yellow}Deleting ${FILENAME}.toml and moving ${FILENAME}.env to .old, use --force to delete all${color_norm}"
+     mv -f "$SETTINGSPATH" "$SETTINGSPATH.old"
+  else
+    echo -e "${color_yellow}Deleting ${FILENAME}.{toml,env} and ${FILENAME}.env${color_norm}"
+    rm -f "$SETTINGSPATH"
+  fi
+
+  rm -f "$TOMLCONFIGPATH"; rm -f "$NGINXENABLEDPATH/$FILENAME"; rm -f "$NGINXAVAILABLEPATH/$FILENAME"
+  if [[ ! DO_SYNCONLY ]]; then service nginx reload; fi
+}
+
+apply_opts() (
+  change_settingkey() { grep -q "^${1}=" "$SETTINGSPATH" && sed -i '' "s/^${1}=.*/${1}=${2}/" "$SETTINGSPATH" || echo -e "$2" >> "$SETTINGSPATH"; }
+  remove_settingkey() { sed -n -i '' "/^${1}=/!p" "$SETTINGSPATH"; }
+
+  if [[ $DO_BAREHOST = true ]]; then
+    change_settingkey 'ISBAREHOST' 'ISBAREHOST=Fully remove this line to render redirects etc.'
+  elif [[ $DO_BAREHOST = false ]]; then
+    remove_settingkey 'ISBAREHOST'
+  fi
+
+  if [[ $DO_HTTP = true ]]; then
+    change_settingkey 'ISHTTP' 'ISHTTP=Fully remove this line to use https.'
+  elif [[ $DO_HTTP = false ]]; then
+    remove_settingkey 'ISHTTP'
+  fi
+
+  if [[ $DO_UNLISTED = true ]]; then
+    change_settingkey 'ISUNLISTED' 'ISUNLISTED=Fully remove this line to go listed.'
+  elif [[ $DO_UNLISTED = false ]]; then
+    remove_settingkey 'ISUNLISTED'
+  fi
+
+  if [[ $DO_DISABLE = true ]]; then
+    rm -f "$NGINXENABLEDPATH/$FILENAME" >/dev/null 2>&1
+  elif [[ $DO_DISABLE = false ]]; then
+    # Too bad bash has no functionality for this
+    local relpath=$(perl -e 'use File::Spec; print File::Spec->abs2rel(@ARGV) . "\n"' "$NGINXAVAILABLEPATH" "$NGINXENABLEDPATH")
+    ln -s "$relpath/$FILENAME" "$NGINXENABLEDPATH/$FILENAME" >/dev/null 2>&1
+  fi
+
+  if [[ $DO_WWW ]]; then
+    change_settingkey 'FULLREDIRECT_HOSTNAMES' ".$TEMPLATE_HELPER_PRIMARYHOST"
+    change_settingkey 'PARTIALREDIRECT_HOSTNAMES' "www.$TEMPLATE_HELPER_PRIMARYHOST"
+
+    if [[ $OPT_PRIMARY = 'www.'* ]]; then
+      change_settingkey 'PARTIALREDIRECT_HOSTNAMES' "$TEMPLATE_HELPER_PRIMARYHOST"
+      change_settingkey 'FULLREDIRECT_HOSTNAMES' "$TEMPLATE_HELPER_PRIMARYHOST"
+    elif [[ ! -z $OPT_PRIMARY ]] && [[ ! $INPUT_HOSTPATTERN = ".$OPT_PRIMARY" ]]; then
+      # If primary with www and not root domain then add full www to partial redirect
+      change_settingkey 'PARTIALREDIRECT_HOSTNAMES' ".$TEMPLATE_HELPER_PRIMARYHOST";
+    elif [[ ! -z $OPT_PRIMARY ]] && [[ $INPUT_HOSTPATTERN = ".$OPT_PRIMARY" ]]; then
+      change_settingkey 'PARTIALREDIRECT_HOSTNAMES' "$TEMPLATE_HELPER_PRIMARYHOST";
+    fi
+  fi
+)
+
+filename_resolution() {
+  # First pass, all dots to underscores, for primary this is the only pass
+  filename="${1//./_}"
+  # Second pass, possible _example_com (.example.com) to example_com
+  filename="${filename#_}"
+  # Third pass, possible *_example_com (*.example.com) to _example_com
+  filename="${filename#'*'}"
+}
+
+hostname_resolution() {
+  # If wildcard, change primary host from *.example.com to example.com
+  host="${1#'*.'}"
+  # If www, change primary host .example.com to example.com
+  host="${host#'.'}"
+}
+
+main() {
+  local n1 n2;
+  parse_args parse_options "$@" && check_input $n1 $n2 || exit 1;
+  INPUT_COMMAND="$n1" INPUT_HOSTPATTERN="$n2"
+
+  local primaryhost host filename
+  # Primary option is preferred otherwise use hostpattern
+  primaryhost="${OPT_PRIMARY:-$INPUT_HOSTPATTERN}"
+  hostname_resolution $primaryhost; PRIMARYHOST="$host"
+  filename_resolution $primaryhost; FILENAME="$filename"
+
+  SECONDARYHOST="\$PRIMARYHOST"
+  if [[ $OPT_PRIMARY ]] && [[ ! $DO_EXACT ]]; then
+    hostname_resolution $INPUT_HOSTPATTERN; SECONDARYHOST="$host"
+  elif [[ $OPT_PRIMARY ]] && [[ $DO_EXACT ]]; then
+    SECONDARYHOST="$INPUT_HOSTPATTERN"
+  fi
+
+  SETTINGSPATH="${CONFDDIR}/conf.d/${FILENAME}.env"
+  TOMLCONFIGPATH="${CONFDDIR}/conf.d/${FILENAME}.toml"
+
+  # We use this template helper all across the settings template to populate keys on load
+  TEMPLATE_HELPER_PRIMARYHOST="\$PRIMARYHOST"
+  TEMPLATE_HELPER_SECONDARYHOST="$SECONDARYHOST"
+
+  # All setting defaults
+  SETTING_PRIMARYHOST="$PRIMARYHOST"
+  SETTING_PRIMARYHOSTNAMES="$TEMPLATE_HELPER_PRIMARYHOST"
+  SETTING_FULLREDIRECT_TOHOST="$TEMPLATE_HELPER_PRIMARYHOST"
+  SETTING_PARTIALREDIRECT_TOHOST="$TEMPLATE_HELPER_PRIMARYHOST"
+  SETTING_FULLREDIRECT="\"*.$TEMPLATE_HELPER_SECONDARYHOST $TEMPLATE_HELPER_SECONDARYHOST\""
+  SETTING_PARTIALREDIRECT="*.$TEMPLATE_HELPER_SECONDARYHOST"
+
+  if [[ $DO_EXACT ]]; then
+    SETTING_FULLREDIRECT="$SECONDARYHOST"
+    SETTING_PARTIALREDIRECT="$SECONDARYHOST"
+  fi
+
+  if [[ $OPT_PRIMARY ]] && [[ ! $PRIMARYHOST = $SECONDARYHOST ]]; then
+    SETTING_PARTIALREDIRECT="$SETTING_FULLREDIRECT"
+  fi
+
+  $INPUT_COMMAND # Run command (e.g. new or update)
+}
+
+generate_prefix() {
+  # Remove all underscores as confd has a hard time with underscores in prefixes and env vars
+  prefix="${1//_/}"
+
+  if [[ $1 = '_'* ]]; then
+    # Prefix a wildcard domain with wc to help with diagnostics
+    prefix="wc$prefix";
+  fi
+}
+
+# Parentheses funcs are run in sub-shells so cleanup is immediately after end of func
+run_confd() (
+  # If first argument is empty, re-render all templates
+  local confdir="$CONFDDIR"
+  if [[ ! -z $1 ]]; then
+    confdir=$(mktemp -d) || return $(err "Failed to create temp dir")
+    cleanup() {
+      rm -rf "$confdir" || return $(err "Failed to delete temp dir '$confdir'")
+    }
+    trap cleanup EXIT
+
+    if [[ ! -f $TOMLCONFIGPATH ]]; then
+      return $(err "Failed to find config file '$TOMLCONFIGPATH'"); fi
+
+    mkdir -p "$confdir"/{conf.d,templates}
+    cp "$TEMPLATE_PATH" "${confdir}/templates/"
+    cp "$TOMLCONFIGPATH" "${confdir}/conf.d/"; cp "$SETTINGSPATH" "${confdir}/conf.d/"
+  fi
+
+  for tomlconfig in ${confdir}/conf.d/*.toml; do
+    local strippedpath="${tomlconfig%.toml}"
+    local settingspath="${strippedpath}.env"
+    local filename="${strippedpath##*/}"
+    local setting_filename="${1:-$filename}"
+
+    if [[ ! -r "$settingspath" ]]; then
+      return $(err "Failed to find and read settings file '$settingspath'"); fi
+
+    # Load all variables so they can be expanded on
+    while read -r p; do
+      if [[ !  -z "$p" ]] && [[ ! "$p" == "#"* ]]; then
+          typeset "$p"
+      fi
+    done < "$settingspath"
+
+    local prefix=''
+    generate_prefix "$filename"
+
+    # Need to export like this to avoid quotes around value
+    local uppername=$(echo "$prefix" | tr '[:lower:]' '[:upper:]')
+    set -o allexport;
+    while read -r p; do
+      if [[ !  -z "$p" ]] && [[ ! "$p" == "#"* ]]; then
+        typeset "${uppername}_$p"
+        # try to eval to do variable expansion
+        eval "${uppername}_$p" >/dev/null 2>&1
+      fi
+    done < "$settingspath"
+    set +o allexport;
+
+    # Set filename to the one for the current operation
+    export "${uppername}_FILENAME=${1}"
+    echo -e "${color_green}Processing \"${settingspath##*/}\" settings...${color_norm}"
+  done
+
+  local sync=${DO_SYNCONLY:+'-sync-only'}
+  echo -e "${color_green}Running confd...${color_norm}"
+  $CONFD -onetime -backend env $sync -confdir "$confdir" 2>&1 | tee -a "$CONFDLOG"
+)
+
+check_input() {
+  if [[ -z $1 ]]; then
+    return $(err_help 'No command supplied'); fi
+  if [[ ! $1 =~ ^(new|update|delete|update-file|update-all)$ ]]; then
+    return $(err_help "Incorrect command supplied '$1'"); fi
+
+  case "$1" in
+    update-all)
+      if [[ ! -z $2 ]]; then
+        return $(err_help "Command 'update-all' does not require a hostname pattern"); fi ;;
+    *)
+      if [[ -z $2 ]]; then
+        return $(err_help "No hostname supplied (e.g. 'example.com')"); fi
+      if [[ ! $2 =~ ^.*\..*$ ]]; then
+        return $(err_help "Invalid hostname: '$2' (valid e.g. 'example.com')"); fi
+
+      if [[ $2 = '.'* ]]; then DO_WWW=true; fi
+      if [[ $2 = '*.'* ]]; then DO_WILDCARD=true; fi
+      ;;
+  esac
+
+  if [[ ! -f $TEMPLATE_PATH ]]; then
+      return $(err_help "Template path could not be found '$TEMPLATE_PATH'"); fi
+  if [[ DO_EXACT ]] && [[ -z OPT_PRIMARY ]]; then
+    return $(err_help "Option --exact is only to be used when specifying a primary host"); fi
+  if [[ ! -z $OPT_PRIMARY ]] && [[ ! $OPT_PRIMARY =~ ^[[:alnum:]].*$ ]]; then
+      return $(err_help "Primary host has to be an absolute host, not a pattern"); fi
+
+  case "$OSTYPE" in
+  darwin*) CONFD="${CONFDFILEPREFIX}darwin";;
+  linux*)  CONFD="${CONFDFILEPREFIX}linux" ;;
+  *)       return $(err "No supported confd binary for: $OSTYPE, see https://github.com/kelseyhightower/confd to build from source.") ;;
+  esac
+}
+
+err() { echo -e "${color_red}Error: ${1}${color_norm}\n" >&2; return 1; }
+err_help() { echo -e "$HELP\n${color_red}Error: ${1}${color_norm}\n" >&2; return 1; }
+
+parse_args() {
+  _parse_args 1 "$@";
+
+  if [[ ! -r $OPT_CONFIG ]]; then
+    return $(err_help "Config file not found at location '$OPT_CONFIG'"); fi
+
+  while read -r p; do
+    if [[ !  -z "$p" ]] && [[ ! "$p" == "#"* ]]; then
+        export "$p"
+    fi
+  done < "$OPT_CONFIG"
+
+  OPT_TEMPLATE="${OPT_TEMPLATE:-$DEFAULT_TEMPLATE}"
+  TEMPLATE_PATH="$OPT_TEMPLATE"
+  # Append root if template path is relative
+  if [[ ! $OPT_TEMPLATE = '/'* ]]; then
+    TEMPLATE_PATH="${CONFDDIR}/templates/${OPT_TEMPLATE}"; fi
+}
+_parse_args() {
+    local OPTIND n="$1"; shift
+    local options_func="$1"; shift
+    "$options_func" "$@" || return 1; shift $(( OPTIND - 1 ))
+
+    if [ $# -gt 0 ]; then
+        if [[ $(eval test -n \${n$n+x}) -eq 0 ]]; then
+          eval "n$n=\$1"
+        fi
+        shift; _parse_args $(( n + 1 )) "$options_func" "$@" || return 1
+    fi
+}
+
+parse_options() {
+  local optspec=":hfesc:p:t:-:"
+  while getopts "$optspec" opt; do
+    case "$opt" in
+      -)
+        case "$OPTARG" in
+          http) DO_HTTP=true ;;
+          https) DO_HTTP=false ;;
+          unlisted) DO_UNLISTED=true ;;
+          listed) DO_UNLISTED=false ;;
+          barehost) DO_BAREHOST=true ;;
+          stdhost) DO_BAREHOST=false ;;
+          disable) DO_DISABLE=true ;;
+          enable) DO_DISABLE=false ;;
+          exact) DO_EXACT=true ;;
+          help) echo -e "$HELP"; exit 0 ;;
+          force) DO_FORCE=true ;;
+          sync-only) DO_SYNCONLY=true ;;
+          config*) OPT_CONFIG="${OPTARG#*=}" ;;
+          primary=*) OPT_PRIMARY="${OPTARG#*=}" ;;
+          template=*) echo "test"; OPT_TEMPLATE="${OPTARG#*=}" ;;
+          *)  if [ "$OPTERR" = 1 ] && [ "${optspec:0:1}" != ":" ]; then
+                return $(err_help "Unknown option --${OPTARG}"); fi
+        esac;;
+      h) echo -e "$HELP"; exit 0 ;;
+      f) DO_FORCE=true ;;
+      e) DO_EXACT=true ;;
+      s) DO_SYNCONLY=true ;;
+      c) OPT_CONFIG="$OPTARG" ;;
+      p) OPT_PRIMARY="$OPTARG" ;;
+      t) OPT_TEMPLATE="$OPTARG" ;;
+      *)  if [ "$OPTERR" != 1 ] || [ "${optspec:0:1}" = ":" ]; then
+            return $(err_help "Unknown option -${OPTARG}"); fi
+    esac
+  done
+}
+
+if [[ -z "${color_start-}" ]]; then
+  color_start="\033[" color_norm="${color_start}0m" color_red="${color_start}0;91m"
+  color_yellow="${color_start}0;33m" color_green="${color_start}0;32m"
+fi
+
+read -r -d '' HELP<<"EOF"
+Usage: hostconfig [OPTIONS] COMMAND <hostname_pattern> [SETTINGS]
+       hostconfig [ -h | --help ]
+
+Crowded utility for confd template (nginx config) management.
+
+Options:
+  -h, --help\t\t Print usage
+  -c  --config=file\t Supply custom config file location
+  -f, --force\t\t Override safety guards for some operations
+  -s, --sync-only\t No checks/reloads for dry run or when no nginx installed
+  -t, --template=path\t Override the default template
+  -p, --primary=host\t Specify primary hostname to use
+  -e, --exact\t\t Use with -p for hostname_pattern without default extra hosts
+
+Settings (left-hand side is default):
+  --stdhost || --barehost\t Config with/without redirects, extra hostnames, etc
+  --listed  || --unlisted\t A listed/unlisted(hidden) config (SEO etc.)
+  --https   || --http \t\t Render a http(only)/https config
+  --enable  || --disable\t Enable/disable config in nginx
+
+Commands:
+    new\t\tUse to create a new site
+    update\tUpdate an existing site
+    update-all\tUpdate all existing sites
+    delete\tDelete an existing site\n
+EOF
+
+main "$@"
