@@ -2,7 +2,7 @@
 
 # Using pwd -P here to resolve any symlinks from calling say via /bin
 pushd "$( cd "$(dirname "$0")" ; pwd -P )" > /dev/null
-OPT_CONFIG="${HOSTCONFIG_CONFIG:-'/etc/hostconfig/hostconfig.conf'}"
+OPT_CONFIG="${HOSTCONFIG_CONFIG:-/etc/hostconfig/hostconfig.conf}"
 
 new() {
   if [[ -f $SETTINGSPATH ]] && [[ -z $DO_FORCE ]]; then
