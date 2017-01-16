@@ -1,4 +1,4 @@
-# nginx-host-config
+# hostconfig
 Eases templating and management for nginx configs in the order of 100's
 
 ```

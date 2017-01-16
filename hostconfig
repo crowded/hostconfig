@@ -17,7 +17,7 @@ new() {
 cat << EOF > "$TOMLCONFIGPATH"
 [template]
 src = "$OPT_TEMPLATE"
-dest = "$OUTPUT_CONFIG_DIR/$FILENAME"
+dest = "$OUTPUT_DIR/$FILENAME"
 prefix = "/$prefix"
 keys = [
     "/fullredirect/hostnames",
@@ -67,7 +67,7 @@ delete() {
     rm -f "$SETTINGSPATH"
   fi
 
-  rm -f "$TOMLCONFIGPATH"; rm -f "$OUTPUT_CONFIG_DIR/$FILENAME"
+  rm -f "$TOMLCONFIGPATH"; rm -f "$OUTPUT_DIR/$FILENAME"
   if [[ ! DO_SYNCONLY ]]; then service nginx reload; fi
 }
 
@@ -278,7 +278,7 @@ check_input() {
   if [[ ! -z $OPT_PRIMARY ]] && [[ ! $OPT_PRIMARY =~ ^[[:alnum:]].*$ ]]; then
       return $(err_help "Primary host has to be an absolute host, not a pattern"); fi
 
-  if [[ -z CONFD_LOG ]]; then CONFD_LOG="/dev/null"
+  if [[ -z CONFD_LOG ]]; then CONFD_LOG="/dev/null"; fi
 
   if [[ -f $CONFD_PATH ]]; then
     progress "Using confd location '$CONFD_PATH'"
@@ -310,6 +310,12 @@ parse_args() {
         export "$p"
     fi
   done < "$OPT_CONFIG"
+
+  # Resolve confd dir to absolute path
+  CONFD_CONFIG_DIR="$(cd $CONFD_CONFIG_DIR; pwd)"
+
+  # As OUTPUT_DIR can be relative to toml dir we cd
+  pushd "${CONFD_CONFIG_DIR}/conf.d" >/dev/null 2>&1
 
   OPT_TEMPLATE="${OPT_TEMPLATE:-$DEFAULT_TEMPLATE}"
   TEMPLATE_PATH="$OPT_TEMPLATE"

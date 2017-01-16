@@ -1,7 +1,8 @@
-CONFD_CONFIG_DIR=/etc/hostconfig/confd
+CONFD_CONFIG_DIR=/etc/hostconfig/configs
 CONFD_LOG=/var/log/hostconfig/confd.log
 
-OUTPUT_CONFIG_DIR=/etc/nginx/sites-generated
+# Relative to CONFD_CONFIG_DIR/conf.d (toml files)
+OUTPUT_DIR=../../output-generated
 DEFAULT_TEMPLATE=default_tenant_template.tmpl
 
 # Uncomment if confd is not on path
