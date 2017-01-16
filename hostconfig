@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+## Utility for confd template (nginx config) management.
+## For more info see the help section at the bottom
+## Version: 0.1.0
+## Author: Nino Floris - nino@getcrowded.co
+## Copyright (c) 2017 Crowded B.V.
+## Distributed under the MIT License (https://opensource.org/licenses/MIT).
 
 OPT_CONFIG="${HOSTCONFIG_CONFIG:-/etc/hostconfig/hostconfig.conf}"
 
