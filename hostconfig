@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-# Using pwd -P here to resolve any symlinks from calling say via /bin
-pushd "$( cd "$(dirname "$0")" ; pwd -P )" > /dev/null
 OPT_CONFIG="${HOSTCONFIG_CONFIG:-/etc/hostconfig/hostconfig.conf}"
 
 new() {
@@ -13,7 +11,7 @@ new() {
 cat << EOF > "$TOMLCONFIGPATH"
 [template]
 src = "$OPT_TEMPLATE"
-dest = "$NGINXAVAILABLEPATH/$FILENAME"
+dest = "$OUTPUT_CONFIG_DIR/$FILENAME"
 prefix = "/$prefix"
 keys = [
     "/fullredirect/hostnames",
@@ -25,6 +23,7 @@ keys = [
     "/ishttp",
     "/isbarehost",
     "/isunlisted",
+    "/isdisabled"
 ]
 check_cmd = "nginx -t -c {{.src}}"
 reload_cmd = "service nginx reload"
@@ -43,8 +42,6 @@ PARTIALREDIRECT_HOSTNAMES=$SETTING_PARTIALREDIRECT
 PARTIALREDIRECT_TOHOST=$SETTING_PARTIALREDIRECT_TOHOST
 EOF
 
-  # By default enable config by setting DO_DISABLE=false
-  if [[ ! $DO_DISABLE ]]; then DO_DISABLE=false; fi
   apply_opts && run_confd "$FILENAME" || return 1
 }
 
@@ -57,14 +54,14 @@ update-all() {
 
 delete() {
   if [[ ! $DO_FORCE ]]; then
-    warn "Deleting ${FILENAME}.toml and moving ${FILENAME}.env to .old, use --force to delete all"
+    warn "Deleting ${FILENAME}.toml and nginx config file, moving ${FILENAME}.env to .old use --force to delete all"
     mv -f "$SETTINGSPATH" "$SETTINGSPATH.old"
   else
-    warn "Deleting ${FILENAME}.{toml,env} and nginx enabled and available config files"
+    warn "Deleting ${FILENAME}.{toml,env} and nginx config file"
     rm -f "$SETTINGSPATH"
   fi
 
-  rm -f "$TOMLCONFIGPATH"; rm -f "$NGINXENABLEDPATH/$FILENAME"; rm -f "$NGINXAVAILABLEPATH/$FILENAME"
+  rm -f "$TOMLCONFIGPATH"; rm -f "$OUTPUT_CONFIG_DIR/$FILENAME"
   if [[ ! DO_SYNCONLY ]]; then service nginx reload; fi
 }
 
@@ -91,18 +88,10 @@ apply_opts() (
     remove_settingkey 'ISUNLISTED'
   fi
 
-  local match
-  if [[ -z $DO_DISABLE ]]; then
-    read_settingkey 'ISDISABLED'; DO_DISABLE="$match"; fi
-
   if [[ $DO_DISABLE = true ]]; then
-    change_settingkey 'ISDISABLED' 'true'
-    rm -f "$NGINXENABLEDPATH/$FILENAME" >/dev/null 2>&1
-  elif [[ $DO_DISABLE = false ]]; then
-    change_settingkey 'ISDISABLED' 'false'
-    # Too bad bash has no functionality for this
-    local relpath=$(perl -e 'use File::Spec; print File::Spec->abs2rel(@ARGV) . "\n"' "$NGINXAVAILABLEPATH" "$NGINXENABLEDPATH")
-    ln -s "$relpath/$FILENAME" "$NGINXENABLEDPATH/$FILENAME" >/dev/null 2>&1
+    change_settingkey 'ISDISABLED' 'Fully remove this line to enable config.'
+  elif [[ $DO_UNLISTED = false ]]; then
+    remove_settingkey 'ISDISABLED'
   fi
   return 0;
 )
@@ -154,8 +143,8 @@ main() {
     SECONDARYHOST="$INPUT_HOSTPATTERN"
   fi
 
-  SETTINGSPATH="${CONFDDIR}/conf.d/${FILENAME}.env"
-  TOMLCONFIGPATH="${CONFDDIR}/conf.d/${FILENAME}.toml"
+  SETTINGSPATH="${CONFD_CONFIG_DIR}/conf.d/${FILENAME}.env"
+  TOMLCONFIGPATH="${CONFD_CONFIG_DIR}/conf.d/${FILENAME}.toml"
 
   # We use this template helper all across the settings template to populate keys on load
   TEMPLATE_HELPER_PRIMARYHOST="\$PRIMARYHOST"
@@ -185,7 +174,7 @@ main() {
 # Parentheses funcs are run in sub-shells so cleanup is immediately after end of func
 run_confd() (
   # If first argument is empty, re-render all templates
-  local confdir="$CONFDDIR"
+  local confdir="$CONFD_CONFIG_DIR"
   if [[ ! -z $1 ]]; then
     confdir=$(mktemp -d) || return $(err "Failed to create temp dir")
     cleanup() {
@@ -241,7 +230,7 @@ run_confd() (
   progress "Running confd command"
 
   set -o pipefail
-  if $CONFDCOMMAND 2>&1 | tee -a "$CONFDLOG"; then return 0;
+  if $CONFDCOMMAND 2>&1 | tee -a "$CONFD_LOG"; then return 0;
   else confd-cleanup || return 1; fi
   set +o pipefail
 )
@@ -249,7 +238,7 @@ run_confd() (
 confd-cleanup() {
   err "Confd ran into issues while executing, see confd.log for more info"
   if [[ $INPUT_COMMAND = 'new' ]]; then
-    # rm -f "$TOMLCONFIGPATH" "$NGINXAVAILABLEPATH/$FILENAME" "$NGINXENABLEDPATH/$FILENAME";
+    rm -f "$TOMLCONFIGPATH" "$NGINXAVAILABLEPATH/$FILENAME" "$NGINXENABLEDPATH/$FILENAME";
     mv "$SETTINGSPATH" "$SETTINGSPATH.old"
   fi
   return 1;
@@ -283,11 +272,17 @@ check_input() {
   if [[ ! -z $OPT_PRIMARY ]] && [[ ! $OPT_PRIMARY =~ ^[[:alnum:]].*$ ]]; then
       return $(err_help "Primary host has to be an absolute host, not a pattern"); fi
 
-  case "$OSTYPE" in
-    darwin*) CONFD="${CONFDFILEPREFIX}darwin";;
-    linux*)  CONFD="${CONFDFILEPREFIX}linux" ;;
-    *)       return $(err "No supported confd binary for: $OSTYPE, see https://github.com/kelseyhightower/confd to build from source.") ;;
-  esac
+  if [[ -z CONFD_LOG ]]; then CONFD_LOG="/dev/null"
+
+  if [[ -f $CONFD_PATH ]]; then
+    progress "Using confd location '$CONFD_PATH'"
+    CONFD="$CONFD_PATH"
+  elif command -v confd >/dev/null 2>&1; then
+    progress "Found confd on PATH, using that as alternative to CONFD_PATH"
+    CONFD="confd"
+  else
+    return $(err "Confd not found on PATH, no valid CONFD_PATH found in config either, confd could not be found");
+  fi
 }
 
 c_start="\033[" c_norm="${c_start}0m" c_red="${c_start}0;91m"
@@ -302,7 +297,7 @@ parse_args() {
   _parse_args 1 "$@";
 
   if [[ ! -r $OPT_CONFIG ]]; then
-    return $(err_help "Config file not found at location '$OPT_CONFIG'"); fi
+    return $(err_help "Config file not found or is not readable at location '$OPT_CONFIG'"); fi
 
   while read -r p; do
     if [[ !  -z "$p" ]] && [[ ! "$p" == "#"* ]]; then
@@ -314,7 +309,7 @@ parse_args() {
   TEMPLATE_PATH="$OPT_TEMPLATE"
   # Append root if template path is relative
   if [[ ! $OPT_TEMPLATE = '/'* ]]; then
-    TEMPLATE_PATH="${CONFDDIR}/templates/${OPT_TEMPLATE}"; fi
+    TEMPLATE_PATH="${CONFD_CONFIG_DIR}/templates/${OPT_TEMPLATE}"; fi
 }
 _parse_args() {
     local OPTIND n="$1"; shift
@@ -370,7 +365,7 @@ read -r -d '' HELP<<"EOF"
 Usage: hostconfig [OPTIONS] COMMAND <hostname_pattern> [SETTINGS]
        hostconfig [ -h | --help ]
 
-Crowded utility for confd template (nginx config) management.
+Utility for confd template (nginx config) management.
 
 Options:
   -h, --help\t\t Print usage

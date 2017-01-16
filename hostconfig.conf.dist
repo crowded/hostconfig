@@ -1,7 +1,8 @@
-CONFDDIR=../confd
-#OSTYPE check will add suffix
-CONFDFILEPREFIX=../confd/confd-0.12.0-alpha3-
-CONFDLOG=/var/log/hostconfig/confd.log
-NGINXAVAILABLEPATH=etc/nginx/sites-available
-NGINXENABLEDPATH=/etc/nginx/sites-enabled
+CONFD_CONFIG_DIR=/etc/hostconfig/confd
+CONFD_LOG=/var/log/hostconfig/confd.log
+
+OUTPUT_CONFIG_DIR=/etc/nginx/sites-generated
 DEFAULT_TEMPLATE=default_tenant_template.tmpl
+
+# Uncomment if confd is not on path
+#CONFD_PATH=/opt/confd/confd
