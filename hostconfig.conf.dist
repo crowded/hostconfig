@@ -1,5 +1,5 @@
 CONFD_CONFIG_DIR=/etc/hostconfig/configs
-CONFD_LOG=/var/log/hostconfig/confd.log
+CONFD_LOG_PATH=/var/log/hostconfig/confd.log
 
 # Relative to CONFD_CONFIG_DIR/conf.d (toml files)
 OUTPUT_DIR=../../output-generated

@@ -236,7 +236,7 @@ run_confd() (
   progress "Running confd command"
 
   set -o pipefail
-  if $CONFDCOMMAND 2>&1 | tee -a "$CONFD_LOG"; then return 0;
+  if $CONFDCOMMAND 2>&1 | tee -a "$CONFD_LOG_PATH"; then return 0;
   else confd-cleanup || return 1; fi
   set +o pipefail
 )
@@ -278,7 +278,7 @@ check_input() {
   if [[ ! -z $OPT_PRIMARY ]] && [[ ! $OPT_PRIMARY =~ ^[[:alnum:]].*$ ]]; then
       return $(err_help "Primary host has to be an absolute host, not a pattern"); fi
 
-  if [[ -z CONFD_LOG ]]; then CONFD_LOG="/dev/null"; fi
+  if [[ -z $CONFD_LOG_PATH ]]; then CONFD_LOG_PATH="/dev/null"; fi
 
   if [[ -f $CONFD_PATH ]]; then
     progress "Using confd location '$CONFD_PATH'"
@@ -294,7 +294,7 @@ check_input() {
 c_start="\033[" c_norm="${c_start}0m" c_red="${c_start}0;91m"
 c_yellow="${c_start}0;33m" c_green="${c_start}0;32m"
 info() { echo -e "Info: ${1}"; return 0; }
-progress() { echo -e "${c_green}Progress: ${1}${c_norm}"; }
+progress() { echo -e "${c_green}[*] ${1}${c_norm}"; }
 warn() { echo -e "${c_yellow}Warning: ${1}${c_norm}\n"; return 0; }
 err() { echo -e "${c_red}Error: ${1}${c_norm}\n" >&2; return 1; }
 err_help() { echo -e "$HELP\n${c_red}Error: ${1}${c_norm}\n" >&2; return 1; }
@@ -311,8 +311,13 @@ parse_args() {
     fi
   done < "$OPT_CONFIG"
 
-  # Resolve confd dir to absolute path
-  CONFD_CONFIG_DIR="$(cd $CONFD_CONFIG_DIR; pwd)"
+  # Resolve settings to absolute path
+  if [[ ! -z $CONFD_CONFIG_DIR ]]; then
+    CONFD_CONFIG_DIR="$(cd $CONFD_CONFIG_DIR; pwd)"; fi
+  if [[ ! -z $CONFD_LOG_PATH ]]; then
+    CONFD_LOG_PATH="$(cd "$(dirname "$CONFD_LOG_PATH")"; pwd)/$(basename "$CONFD_LOG_PATH")"; fi
+  if [[ ! -z $CONFD_PATH ]] ; then
+    CONFD_PATH="$(cd "$(dirname "$CONFD_PATH")"; pwd)/$(basename "$CONFD_PATH")"; fi
 
   # As OUTPUT_DIR can be relative to toml dir we cd
   pushd "${CONFD_CONFIG_DIR}/conf.d" >/dev/null 2>&1
