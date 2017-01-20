@@ -227,7 +227,7 @@ run_confd() (
     set +o allexport;
 
     # Set filename to the one for the current operation
-    export "${uppername}_FILENAME=${1}"
+    export "${uppername}_FILENAME=${setting_filename}"
     progress "Processing '${settingspath##*/}' settings..."
   done
 
