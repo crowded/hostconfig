@@ -103,12 +103,21 @@ apply_opts() (
 )
 
 filename_resolution() {
-  # First pass, all dots to underscores, for primary this is the only pass
-  filename="${1//./_}"
-  # Second pass, possible _example_com (.example.com) to example_com
-  filename="${filename#_}"
-  # Third pass, possible *_example_com (*.example.com) to _example_com
-  filename="${filename#'*'}"
+  filename="$1"
+  # First pass, double escape underscores, all dots to underscores, for primary this is the only pass
+  filename="${filename//_/__}"
+  filename="${filename//./_}"
+  # Second pass, possible *_example_com (*.example.com) to __example_com
+  filename="${filename/#'*'/_}"
+}
+
+reverse_filename_resolution() {
+  hostname="$1"
+  # Second pass, possible x_example_com (*.example.com) to *_example_com
+  hostname="${hostname/#__/'*'_}"
+  # First pass, double unescape underscores, all remaining underscores to dots, for primary this is the only pass
+  hostname="${hostname//__/_}"
+  hostname="${hostname//_/.}"
 }
 
 hostname_resolution() {
@@ -126,8 +135,10 @@ prefix_resolution() {
   # To help with diagnostics and to prevent env var restriction issues
   if [[ $1 =~ ^[[:digit:]] ]]; then
     prefix="x$prefix";
-  elif [[ $1 = '_'* ]]; then
+  elif [[ $1 = '__'* ]]; then
     prefix="wc$prefix";
+  elif [[ $1 = '_'* ]]; then
+    prefix="www$prefix";
   fi
 }
 
