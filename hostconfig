@@ -73,8 +73,8 @@ delete() {
 
 apply_opts() (
   read_settingkey() { match=$(grep -q "^${1}=" "$SETTINGSPATH"); match="${match#=}"; }
-  change_settingkey() { grep -q "^${1}=" "$SETTINGSPATH" && (sed -i.bak "s/^${1}=.*/${1}=${2}/" "$SETTINGSPATH"; rm -f "$SETTINGSPATH.bak") || echo -e "$1=$2" >> "$SETTINGSPATH"; }
-  remove_settingkey() { sed -n -i '' "/^${1}=/!p" "$SETTINGSPATH"; }
+  change_settingkey() { grep -q "^${1}=" "$SETTINGSPATH" && (sed -i.bak "s/^${1}=.*/${1}=${2}/" "$SETTINGSPATH"; rm -f "$SETTINGSPATH.bak";) || echo -e "$1=$2" >> "$SETTINGSPATH"; }
+  remove_settingkey() { sed -i.bak "s/^${1}=.*//" "$SETTINGSPATH"; rm -f "$SETTINGSPATH.bak"; }
 
   if [[ $DO_BAREHOST = true ]]; then
     change_settingkey 'ISBAREHOST' 'Fully remove this line to render redirects etc.'
@@ -313,7 +313,7 @@ parse_args() {
 
   # Resolve settings to absolute path
   if [[ ! -z $CONFD_CONFIG_DIR ]]; then
-    CONFD_CONFIG_DIR="$(cd $CONFD_CONFIG_DIR; pwd)"; fi
+    CONFD_CONFIG_DIR="$(cd "$CONFD_CONFIG_DIR"; pwd)"; fi
   if [[ ! -z $CONFD_LOG_PATH ]]; then
     CONFD_LOG_PATH="$(cd "$(dirname "$CONFD_LOG_PATH")"; pwd)/$(basename "$CONFD_LOG_PATH")"; fi
   if [[ ! -z $CONFD_PATH ]] ; then
