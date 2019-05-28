@@ -31,7 +31,7 @@ keys = [
     "/isunlisted",
     "/isdisabled"
 ]
-check_cmd = "nginx -t -c {{.src}}"
+check_cmd = "nginx -t"
 reload_cmd = "service nginx reload"
 
 EOF
