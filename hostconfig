@@ -31,8 +31,7 @@ keys = [
     "/isunlisted",
     "/isdisabled"
 ]
-check_cmd = "nginx -t"
-reload_cmd = "service nginx reload"
+reload_cmd = "nginx -t && service nginx reload"
 
 EOF
 cat << EOF > "$SETTINGSPATH"
